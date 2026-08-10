@@ -1,20 +1,21 @@
 # Waybar Hyprland Minimize Plugin 📌
 
-A light-weight module and script suite for **Waybar** + **Hyprland** that adds dynamic window minimization and unminimization support with visual indicators in your bar.
+A light-weight, event-driven module and script suite for **Waybar** + **Hyprland** that adds dynamic window minimization and unminimization support with instant visual indicators.
 
 ## 🚀 Features
 
-- **Icon Indicators**: Shows Nerd Font icons for minimized apps directly on your Waybar.
-- **Rich Tooltips**: Hover over the icons to see a formatted list of all minimized window titles.
+- **⚡ Event-Driven Updates**: Uses Hyprland's IPC socket for **0ms latency** status updates with zero CPU polling overhead.
+- **🎨 Custom Icon Mapping**: Easily map any application class to custom Nerd Font icons via `~/.config/waybar/minimize-icons.json` (with built-in smart fuzzy fallbacks).
+- **Rich Tooltips**: Hover over icons to see a formatted list of all minimized window titles.
 - **Click to Restore**: Single click on the Waybar module restores the last minimized window to your current active workspace.
-- **Hyprland Integration**: Uses Hyprland's `special:minimized` workspace under the hood to manage minimized state cleanly without workspace clutter.
+- **Hyprland Integration**: Uses Hyprland's `special:minimized` workspace under the hood to manage minimized state cleanly.
 
 ## 📦 Prerequisites
 
 - **Hyprland**
 - **Waybar**
-- **jq** (`sudo pacman -S jq` or distribution equivalent)
-- **Nerd Fonts** (e.g. JetBrainsMono Nerd Font) for icons
+- **socat** & **jq** (`sudo pacman -S socat jq`)
+- **Nerd Fonts** (e.g. JetBrainsMono Nerd Font)
 
 ## 📥 Installation
 
@@ -24,18 +25,29 @@ A light-weight module and script suite for **Waybar** + **Hyprland** that adds d
    cd waybar-minimize-plugin
    ```
 
-2. Run the install script:
+2. Run the installer:
    ```bash
    ./install.sh
    ```
 
-3. Configure Waybar and Hyprland (see below).
+## 🎨 Customizing Icons
+
+Edit `~/.config/waybar/minimize-icons.json` to add or override icons for any app:
+
+```json
+{
+  "com.mitchellh.ghostty": "󰞷",
+  "firefox": "󰈹",
+  "discord": "󰙯",
+  "spotify": "󰓇",
+  "code": "󰨞",
+  "default": "󰍄"
+}
+```
 
 ## ⚙️ Configuration
 
 ### 1. Hyprland Keybindings (`~/.config/hypr/bindings.conf`)
-
-Add the following keybindings:
 
 ```ini
 bindd = SUPER, M, Minimize active window, movetoworkspacesilent, special:minimized
@@ -56,15 +68,12 @@ Add the custom module definition:
 ```json
 "custom/minimized-icons": {
   "exec": "~/.config/waybar/scripts/minimized-icons.sh",
-  "interval": 1,
   "return-type": "json",
   "on-click": "~/.config/waybar/scripts/unminimize-click.sh"
 }
 ```
 
 ### 3. Waybar Styling (`~/.config/waybar/style.css`)
-
-Add CSS styles for the module:
 
 ```css
 #custom-minimized-icons {
@@ -84,15 +93,6 @@ Add CSS styles for the module:
   margin: 0;
 }
 ```
-
-## ⌨️ Shortcuts
-
-| Keybinding | Action |
-| --- | --- |
-| `Super` + `M` | Minimize active window |
-| `Super` + `Alt` + `M` | Toggle minimized workspace overlay |
-| `Super` + `Shift` + `M` | Restore last minimized window |
-| `Left Click` on Waybar module | Restore last minimized window |
 
 ## 📄 License
 

@@ -3,7 +3,6 @@
 
 "custom/minimized-icons": {
   "exec": "~/.config/waybar/scripts/minimized-icons.sh",
-  "interval": 1,
   "return-type": "json",
   "on-click": "~/.config/waybar/scripts/unminimize-click.sh"
 }
