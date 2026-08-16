@@ -1,8 +1,0 @@
-// Add "custom/minimized-icons" to your "modules-left" (or center/right) array in ~/.config/waybar/config.jsonc:
-// "modules-left": ["custom/omarchy", "hyprland/workspaces", "custom/minimized-icons"],
-
-"custom/minimized-icons": {
-  "exec": "~/.config/waybar/scripts/minimized-icons.sh",
-  "return-type": "json",
-  "on-click": "~/.config/waybar/scripts/unminimize-click.sh"
-}

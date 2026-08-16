@@ -1,98 +1,63 @@
-# Waybar Hyprland Minimize Plugin 📌
+# Minimized windows — Omarchy bar widget 📌
 
-A light-weight, event-driven module and script suite for **Waybar** + **Hyprland** that adds dynamic window minimization and unminimization support with instant visual indicators.
+A Quickshell bar widget for **Omarchy** that tracks windows minimized to
+Hyprland's `special:minimized` workspace, shows their Nerd Font icons in the
+bar, and restores the most recently minimized window on click.
 
-## 🚀 Features
+Replaces the original Waybar module with a native Omarchy plugin: no scripts,
+no polling, no `socat`/`jq` — the widget reads Quickshell's Hyprland models,
+so it updates instantly on `openwindow`/`closewindow`/`movewindow`/workspace
+events.
 
-- **⚡ Event-Driven Updates**: Uses Hyprland's IPC socket for **0ms latency** status updates with zero CPU polling overhead.
-- **🎨 Custom Icon Mapping**: Easily map any application class to custom Nerd Font icons via `~/.config/waybar/minimize-icons.json` (with built-in smart fuzzy fallbacks).
-- **Rich Tooltips**: Hover over icons to see a formatted list of all minimized window titles.
-- **Click to Restore**: Single click on the Waybar module restores the last minimized window to your current active workspace.
-- **Hyprland Integration**: Uses Hyprland's `special:minimized` workspace under the hood to manage minimized state cleanly.
+## ✨ Features
+
+- **⚡ Event-driven**: renders straight from Quickshell's Hyprland models — no
+  polling, no subprocesses.
+- **🎨 Smart icons**: per-class Nerd Font glyphs with fuzzy fallbacks
+  (ghostty/terminal, chrome/firefox/brave, nautilus/thunar, spotify, code, …).
+- **💬 Rich tooltip**: lists every minimized window title.
+- **🖱️ Click to restore**: restores the last minimized window to the currently
+  focused workspace and focuses it.
+- **⌨️ Keybindings**: minimize, toggle the overlay, and restore via keybinds.
 
 ## 📦 Prerequisites
 
-- **Hyprland**
-- **Waybar**
-- **socat** & **jq** (`sudo pacman -S socat jq`)
-- **Nerd Fonts** (e.g. JetBrainsMono Nerd Font)
+- **Omarchy** (Quickshell shell + Hyprland)
+- A **Nerd Font** in the bar (the default Omarchy font already is one)
 
 ## 📥 Installation
 
-1. Clone this repository:
-   ```bash
-   git clone https://github.com/Dev-Herni/waybar-minimize-plugin.git
-   cd waybar-minimize-plugin
-   ```
+From anywhere (installs into `~/.config/omarchy/plugins/dev-herni.minimized`):
 
-2. Run the installer:
-   ```bash
-   ./install.sh
-   ```
-
-## 🎨 Customizing Icons
-
-Edit `~/.config/waybar/minimize-icons.json` to add or override icons for any app:
-
-```json
-{
-  "com.mitchellh.ghostty": "󰞷",
-  "firefox": "󰈹",
-  "discord": "󰙯",
-  "spotify": "󰓇",
-  "code": "󰨞",
-  "default": "󰍄"
-}
+```bash
+omarchy plugin add https://github.com/Dev-Herni/waybar-minimize-plugin.git --enable --yes
 ```
 
-## ⚙️ Configuration
+Or add the bar widget from the Omarchy settings UI (`omarchy menu` → Settings →
+Bar), picking **Minimized windows** from the widget catalog.
 
-### 1. Hyprland Keybindings (`~/.config/hypr/bindings.conf`)
+## 🎛️ Keybindings
 
-```ini
-bindd = SUPER, M, Minimize active window, movetoworkspacesilent, special:minimized
-bindd = SUPER ALT, M, Toggle minimized workspace overlay, togglespecialworkspace, minimized
-bindd = SUPER SHIFT, M, Restore last minimized window, exec, ~/.config/waybar/scripts/unminimize-click.sh
+Add these to `~/.config/hypr/bindings.lua`:
+
+```lua
+-- Minimize / restore windows
+o.bind("SUPER + M", "Minimize window", "hyprctl dispatch 'hl.dsp.window.move({ workspace = \"special:minimized\", follow = false })'")
+o.bind("SUPER + ALT + M", "Toggle minimized overlay", "hyprctl dispatch 'hl.dsp.workspace.toggle_special(\"minimized\")'")
+o.bind("SUPER + SHIFT + M", "Restore last minimized window", "omarchy-shell dev-herni.minimized restore")
 ```
 
-### 2. Waybar Module (`~/.config/waybar/config.jsonc`)
+The restore binding sends IPC to the widget (`IpcHandler` target
+`dev-herni.minimized`), which broadcasts the restore across all bar monitors.
 
-Add `"custom/minimized-icons"` to your modules list (e.g., `"modules-left"`):
+## 🖥️ How it works
 
-```json
-"modules-left": ["custom/omarchy", "hyprland/workspaces", "custom/minimized-icons"]
-```
-
-Add the custom module definition:
-
-```json
-"custom/minimized-icons": {
-  "exec": "~/.config/waybar/scripts/minimized-icons.sh",
-  "return-type": "json",
-  "on-click": "~/.config/waybar/scripts/unminimize-click.sh"
-}
-```
-
-### 3. Waybar Styling (`~/.config/waybar/style.css`)
-
-```css
-#custom-minimized-icons {
-  margin-left: 10px;
-  color: @foreground;
-}
-
-#custom-minimized-icons.minimized {
-  padding: 0 8px;
-  margin: 0 4px;
-  border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.08);
-}
-
-#custom-minimized-icons.empty {
-  padding: 0;
-  margin: 0;
-}
-```
+- Minimizing moves the focused window to the special workspace
+  `special:minimized` (persistent overlay, visible when toggled).
+- The widget watches that workspace's toplevels and shows one icon per window.
+- Clicking (or the restore keybind) moves the last one back to the active
+  workspace and focuses it, using the new Lua dispatcher syntax:
+  `hyprctl dispatch 'hl.dsp.window.move({ window = "address:0x...", workspace = <id>, follow = false })'`.
 
 ## 📄 License
 

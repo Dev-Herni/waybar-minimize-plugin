@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "dev-herni.minimized",
+  "name": "Minimized windows",
+  "version": "1.0.0",
+  "author": "Dev-Herni",
+  "description": "Show minimized windows in the bar and restore them",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Minimized.qml"
+  },
+  "barWidget": {
+    "displayName": "Minimized windows",
+    "description": "Show icons for windows minimized to special:minimized and restore the last one on click",
+    "category": "Compositor",
+    "allowMultiple": false,
+    "defaultSection": "left"
+  }
+}
