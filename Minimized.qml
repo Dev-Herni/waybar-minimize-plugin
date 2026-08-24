@@ -202,6 +202,38 @@ BarWidget {
 
   // ------------------------------------------------------------------ actions
 
+  // Window titles are application-controlled and flow into the bar tooltip,
+  // whose Text defaults to AutoText. Cap length and escape markup so a
+  // hostile title can never inject rich-text into the shell UI.
+  function sanitizeTitle(t) {
+    var s = String(t === undefined || t === null ? "" : t)
+    s = s.replace(/\s+/g, " ").trim()
+    if (s.length > 80) s = s.slice(0, 79) + "\u2026"
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  }
+
+  // Toplevel addresses are interpolated into Hyprland Lua expressions, so
+  // only accept plain hex; geometry/workspace values must be finite and
+  // bounded before they touch a dispatch string.
+  function safeAddress(toplevel) {
+    var a = root.addressOf(toplevel)
+    return /^[0-9a-fA-F]{1,16}$/.test(a) ? a : ""
+  }
+
+  function boundedInt(v, min, max, fallback) {
+    var n = Number(v)
+    if (!isFinite(n) || n < min || n > max) return fallback
+    return Math.floor(n)
+  }
+
+  function boundedPoint(v) {
+    if (!v || !Array.isArray(v) || v.length < 2) return null
+    var x = Number(v[0]), y = Number(v[1])
+    if (!isFinite(x) || !isFinite(y)) return null
+    if (Math.abs(x) > 100000 || Math.abs(y) > 100000) return null
+    return [Math.round(x), Math.round(y)]
+  }
+
   function dispatch(lua) {
     if (!root.bar) return
     root.bar.run("hyprctl dispatch " + Util.shellQuote(lua))
@@ -211,15 +243,19 @@ BarWidget {
   // geometry when it was floating before minimize, then focus it.
   function restoreToplevel(toplevel) {
     if (!toplevel || !root.bar) return
-    var key = root.addressOf(toplevel)
+    var key = root.safeAddress(toplevel)
+    if (!key) {
+      console.warn(root.moduleName + ": refusing restore of window with invalid address")
+      return
+    }
     var addr = "address:0x" + key
-    var ws = Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 1
+    var ws = root.boundedInt(Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 1, 1, 99999, 1)
     var mem = root.floatMemory[key] || {}
     var ipc = toplevel.lastIpcObject || {}
     var wasFloating = mem.floating === true ||
       ipc.floating === true || ipc.floating === "true" || ipc.floating === 1
-    var at = mem.at || ipc.at
-    var size = mem.size || ipc.size
+    var at = root.boundedPoint(mem.at || ipc.at)
+    var size = root.boundedPoint(mem.size || ipc.size)
 
     root.dispatch(
       "hl.dsp.window.move({ window = \"" + addr + "\", workspace = " + ws + ", follow = false })")
@@ -227,15 +263,15 @@ BarWidget {
     if (wasFloating) {
       root.dispatch(
         "hl.dsp.window.float({ window = \"" + addr + "\", action = \"enable\" })")
-      if (size && size.length >= 2) {
+      if (size) {
         root.dispatch(
           "hl.dsp.window.resize({ window = \"" + addr + "\", x = " +
-          Number(size[0]) + ", y = " + Number(size[1]) + " })")
+          size[0] + ", y = " + size[1] + " })")
       }
-      if (at && at.length >= 2) {
+      if (at) {
         root.dispatch(
           "hl.dsp.window.move({ window = \"" + addr + "\", x = " +
-          Number(at[0]) + ", y = " + Number(at[1]) + " })")
+          at[0] + ", y = " + at[1] + " })")
       } else {
         root.dispatch("hl.dsp.window.center({ window = \"" + addr + "\" })")
       }
@@ -296,7 +332,7 @@ BarWidget {
 
         bar: root.bar
         text: root.iconFor(modelData)
-        tooltipText: modelData.title || "Minimized window"
+        tooltipText: root.sanitizeTitle(modelData.title) || "Minimized window"
         horizontalMargin: 4
         verticalPadding: 6
         fixedWidth: root.vertical ? root.barSize : -1
