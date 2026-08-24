@@ -1,5 +1,8 @@
 # Minimized windows — Omarchy bar widget
 
+<img width="233" height="106" alt="image" src="https://github.com/user-attachments/assets/7c78dd11-bf17-467f-9a47-afcab49ad840" />
+
+
 A Quickshell bar widget for **Omarchy** that tracks windows minimized to
 Hyprland's `special:minimized` workspace and shows one clickable Nerd Font
 icon per window in the bar. Clicking an icon restores that exact window.
