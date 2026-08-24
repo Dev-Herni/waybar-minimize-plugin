@@ -68,3 +68,11 @@ window — handy when you minimize without looking at the bar.
 ## License
 
 [MIT License](LICENSE)
+
+## Removal
+
+```bash
+omarchy plugin remove dev-herni.minimized --yes
+```
+
+The plugin creates no files outside its own folder.
