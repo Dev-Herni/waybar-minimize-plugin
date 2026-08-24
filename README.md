@@ -46,12 +46,32 @@ Add these to `~/.config/hypr/bindings.lua`:
 -- Minimize / restore windows
 o.bind("SUPER + M", "Minimize window", "hyprctl dispatch 'hl.dsp.window.move({ workspace = \"special:minimized\", follow = false })'")
 o.bind("SUPER + ALT + M", "Toggle minimized overlay", "hyprctl dispatch 'hl.dsp.workspace.toggle_special(\"minimized\")'")
+```
+
+### Restore keybind (opt-in IPC)
+
+The `restore` action is also reachable programmatically over the shell's IPC
+(target `dev-herni.minimized`), which lets any local process move and focus a
+minimized window. Because that mutates window state without a click, it is
+**disabled by default**. To opt in, create:
+
+```
+~/.config/omarchy/plugins/dev-herni.minimized.conf
+```
+
+containing the line:
+
+```ini
+ipc_restore_enabled = true
+```
+
+It takes effect immediately (no restart needed), after which you can bind:
+
+```lua
 o.bind("SUPER + SHIFT + M", "Restore last minimized window", "omarchy-shell dev-herni.minimized restore")
 ```
 
-The restore binding sends IPC to the widget (`IpcHandler` target
-`dev-herni.minimized`), which restores the most recently focused minimized
-window — handy when you minimize without looking at the bar.
+Bar clicks never require this opt-in.
 
 ## How it works
 

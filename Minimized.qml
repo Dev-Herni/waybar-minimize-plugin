@@ -136,6 +136,7 @@ BarWidget {
   Component.onCompleted: {
     Hyprland.refreshToplevels()
     Qt.callLater(root.snapshotFloatState)
+    Qt.callLater(function() { ipcConfProbe.running = true })
   }
 
   // ------------------------------------------------------------------ icons
@@ -301,22 +302,58 @@ BarWidget {
     root.restoreToplevel(root.minimized[0])
   }
 
+  // -------------------------------------------------------------- IPC opt-in
+
+  // restore() mutates window state, so programmatic access stays disabled
+  // until the user opts in by adding this line to
+  // ~/.config/omarchy/plugins/dev-herni.minimized.conf:
+  //   ipc_restore_enabled = true
+  readonly property string ipcConfPath: Quickshell.env("HOME") +
+    "/.config/omarchy/plugins/dev-herni.minimized.conf"
+  property bool ipcRestoreEnabled: false
+
+  function evalIpcConf(content) {
+    return /(^|\n)[ \t]*ipc_restore_enabled[ \t]*=[ \t]*true[ \t]*(\n|$)/.test(String(content || ""))
+  }
+
+  FileView {
+    path: root.ipcConfPath
+    watchChanges: true
+    printErrors: false
+    onFileChanged: ipcConfProbe.running = true
+  }
+
+  Process {
+    id: ipcConfProbe
+    command: ["bash", "-c", "cat " + JSON.stringify(root.ipcConfPath) + " 2>/dev/null; true"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.ipcRestoreEnabled = root.evalIpcConf(text)
+    }
+  }
+
   // ------------------------------------------------------------------ ui
 
   visible: root.count > 0
   implicitWidth: grid.implicitWidth + root.trailingGap
   implicitHeight: grid.implicitHeight
 
-  IpcHandler {
-    target: "dev-herni.minimized"
+  // Programmatic restore is gated behind the user's explicit opt-in above;
+  // bar clicks never require it.
+  Loader {
+    active: root.ipcRestoreEnabled
 
-    function restore(): string {
-      root.restoreLast()
-      return "ok"
-    }
+    sourceComponent: IpcHandler {
+      target: "dev-herni.minimized"
 
-    function ping(): string {
-      return "ok"
+      function restore(): string {
+        root.restoreLast()
+        return "ok"
+      }
+
+      function ping(): string {
+        return "ok"
+      }
     }
   }
 
