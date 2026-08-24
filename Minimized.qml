@@ -4,10 +4,11 @@ import Quickshell
 import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
+import "MinimizedModel.js" as Model
 
 // Omarchy bar widget that shows windows minimized to Hyprland's
 // special:minimized workspace, one clickable icon per window. Clicking an
-// icon restores that exact window; the IPC restore action restores the most
+// icon restores that exact window; restore-last.sh restores the most
 // recently focused one for keybind workflows.
 //
 // Floating state + geometry are snapshotted while a window is still on a
@@ -19,11 +20,17 @@ BarWidget {
 
   // ------------------------------------------------------------------ state
 
-  // address (hex, no 0x) -> { floating, at, size }
+  // address (hex, no 0x) -> { floating, at, size, pendingTiled? }
   property var floatMemory: ({})
+  property bool snapshotQueued: false
+
+  readonly property string memoryPath: {
+    var xdg = Quickshell.env("XDG_STATE_HOME")
+    var base = xdg && xdg.length ? xdg : (Quickshell.env("HOME") + "/.local/state")
+    return base + "/omarchy/dev-herni.minimized.json"
+  }
 
   readonly property var minimized: {
-    // Depend on workspaces/toplevels so the list refreshes on Hyprland events.
     var _ws = Hyprland.workspaces.values
     var _tops = Hyprland.toplevels ? Hyprland.toplevels.values : []
     return root.collectMinimized()
@@ -40,12 +47,8 @@ BarWidget {
           result.push(toplevels[j])
       }
     }
-    // Most recently focused first for tooltip; restore uses last = oldest in
-    // workspace order is unreliable, so sort by focusHistoryID when present.
     result.sort(function(a, b) {
-      var fa = root.focusId(a)
-      var fb = root.focusId(b)
-      return fa - fb
+      return root.focusId(a) - root.focusId(b)
     })
     return result
   }
@@ -60,7 +63,7 @@ BarWidget {
 
   function addressOf(toplevel) {
     if (!toplevel) return ""
-    return String(toplevel.address || "")
+    return Model.normalizeAddress(toplevel.address || (toplevel.lastIpcObject && toplevel.lastIpcObject.address) || "")
   }
 
   function isSpecialMinimized(toplevel) {
@@ -72,44 +75,72 @@ BarWidget {
     return false
   }
 
-  // Snapshot floating/geometry for windows that are NOT minimized yet, so a
-  // later restore still knows they were floating even if Hyprland clears the
-  // flag while they sit on special:minimized.
-  function snapshotFloatState() {
+  function snapshotWindows() {
     var tops = Hyprland.toplevels ? Hyprland.toplevels.values : []
-    var next = Object.assign({}, root.floatMemory)
-    var changed = false
-    var live = {}
-
+    var list = []
     for (var i = 0; i < tops.length; i++) {
       var t = tops[i]
       var addr = root.addressOf(t)
       if (!addr) continue
-      live[addr] = true
-
-      if (root.isSpecialMinimized(t)) continue
-
       var ipc = t.lastIpcObject || {}
-      var floating = ipc.floating === true || ipc.floating === "true" || ipc.floating === 1
-      var prev = next[addr]
-      var at = root.boundedPoint(ipc.at)
-      var size = root.boundedPoint(ipc.size)
-      if (!prev || prev.floating !== floating ||
-          JSON.stringify(prev.at) !== JSON.stringify(at) ||
-          JSON.stringify(prev.size) !== JSON.stringify(size)) {
-        next[addr] = { floating: floating, at: at, size: size }
-        changed = true
-      }
+      var ws = t.workspace
+      var hasWs = (ws && ws.name) || (ipc.workspace && ipc.workspace.name)
+      var hasIpc = ipc.floating !== undefined || ipc.at !== undefined
+      list.push({
+        address: addr,
+        special: root.isSpecialMinimized(t),
+        unknown: !hasWs || !hasIpc,
+        floating: ipc.floating,
+        at: ipc.at,
+        size: ipc.size
+      })
     }
+    return list
+  }
 
-    for (var key in next) {
-      if (!live[key]) {
-        delete next[key]
-        changed = true
-      }
+  function snapshotFloatState() {
+    try {
+      var next = Model.nextFloatMemory(root.floatMemory, root.snapshotWindows())
+      if (JSON.stringify(next) !== JSON.stringify(root.floatMemory))
+        root.floatMemory = next
+      persistTimer.restart()
+      if (Model.hasPendingTiled(next)) confirmTiledTimer.restart()
+    } catch (e) {
+      console.warn(root.moduleName + " snapshot failed: " + e)
     }
+  }
 
-    if (changed) root.floatMemory = next
+  function persistFloatMemory() {
+    try {
+      var persistable = {}
+      var mem = root.floatMemory || {}
+      for (var key in mem) {
+        if (!Object.prototype.hasOwnProperty.call(mem, key) || !mem[key]) continue
+        persistable[key] = {
+          floating: mem[key].floating === true,
+          at: mem[key].at || null,
+          size: mem[key].size || null
+        }
+      }
+      var slash = root.memoryPath.lastIndexOf("/")
+      var dir = slash > 0 ? root.memoryPath.slice(0, slash) : "."
+      Quickshell.execDetached(["bash", "-lc",
+        "mkdir -p " + Model.shellQuote(dir) +
+        " && printf '%s\\n' " + Model.shellQuote(JSON.stringify(persistable)) +
+        " > " + Model.shellQuote(root.memoryPath)
+      ])
+    } catch (e) {
+      console.warn(root.moduleName + " persist failed: " + e)
+    }
+  }
+
+  function queueSnapshot() {
+    if (root.snapshotQueued) return
+    root.snapshotQueued = true
+    Qt.callLater(function() {
+      root.snapshotQueued = false
+      root.snapshotFloatState()
+    })
   }
 
   Connections {
@@ -122,24 +153,53 @@ BarWidget {
           name === "workspace" || name === "workspacev2" ||
           name === "activewindow" || name === "activewindowv2") {
         Hyprland.refreshToplevels()
-        Qt.callLater(root.snapshotFloatState)
+        root.queueSnapshot()
+        confirmTiledTimer.restart()
       }
     }
   }
 
   Connections {
     target: Hyprland.toplevels
-    function onValuesChanged() { root.snapshotFloatState() }
+    function onValuesChanged() { root.queueSnapshot() }
+  }
+
+  Timer {
+    id: confirmTiledTimer
+    interval: 150
+    repeat: false
+    onTriggered: root.snapshotFloatState()
+  }
+
+  Timer {
+    id: persistTimer
+    interval: 40
+    repeat: false
+    onTriggered: root.persistFloatMemory()
+  }
+
+  Timer {
+    id: warmupTimer
+    interval: 150
+    repeat: true
+    property int ticks: 0
+    onTriggered: {
+      Hyprland.refreshToplevels()
+      root.snapshotFloatState()
+      warmupTimer.ticks += 1
+      if (warmupTimer.ticks >= 12) warmupTimer.stop()
+    }
   }
 
   Component.onCompleted: {
     Hyprland.refreshToplevels()
-    Qt.callLater(root.snapshotFloatState)
+    root.queueSnapshot()
+    persistTimer.restart()
+    warmupTimer.start()
   }
 
   // ------------------------------------------------------------------ icons
 
-  // class -> Nerd Font glyph (keys lowercased; lookup is case-insensitive).
   readonly property var iconMap: ({
     "com.mitchellh.ghostty": "\uDB81\uDFB7",
     "alacritty": "\uDB81\uDFB7",
@@ -177,8 +237,6 @@ BarWidget {
 
   function iconFor(toplevel) {
     var klass = root.classOf(toplevel).toLowerCase()
-    // Own-property check only: classes like "constructor"/"toString" would
-    // otherwise resolve to inherited Object.prototype members.
     if (Object.prototype.hasOwnProperty.call(root.iconMap, klass))
       return root.iconMap[klass]
     if (klass.indexOf("discord") !== -1 || klass.indexOf("vesktop") !== -1 ||
@@ -186,7 +244,6 @@ BarWidget {
     if (klass.indexOf("ghostty") !== -1 || klass.indexOf("terminal") !== -1 ||
         klass.indexOf("alacritty") !== -1 || klass.indexOf("kitty") !== -1 ||
         klass.indexOf("foot") !== -1) return root.iconMap["foot"]
-    // Chromium/Chrome before generic "browser" so they never inherit Firefox.
     if (klass.indexOf("chrom") !== -1) return root.iconMap["chromium"]
     if (klass.indexOf("brave") !== -1) return root.iconMap["brave"]
     if (klass.indexOf("firefox") !== -1 || klass.indexOf("browser") !== -1)
@@ -205,98 +262,30 @@ BarWidget {
 
   // ------------------------------------------------------------------ actions
 
-  // Window titles are application-controlled and flow into the bar tooltip,
-  // whose Text defaults to AutoText. Cap length and escape markup so a
-  // hostile title can never inject rich-text into the shell UI.
-  function sanitizeTitle(t) {
-    var s = String(t === undefined || t === null ? "" : t)
-    s = s.replace(/\s+/g, " ").trim()
-    if (s.length > 80) s = s.slice(0, 79) + "\u2026"
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  }
-
-  // Toplevel addresses are interpolated into Hyprland Lua expressions, so
-  // only accept plain hex; geometry/workspace values must be finite and
-  // bounded before they touch a dispatch string.
-  function safeAddress(toplevel) {
-    var a = root.addressOf(toplevel)
-    return /^[0-9a-fA-F]{1,16}$/.test(a) ? a : ""
-  }
-
-  function boundedInt(v, min, max, fallback) {
-    var n = Number(v)
-    if (!isFinite(n) || n < min || n > max) return fallback
-    return Math.floor(n)
-  }
-
-  function boundedPoint(v) {
-    if (!v || !Array.isArray(v) || v.length < 2) return null
-    var x = Number(v[0]), y = Number(v[1])
-    if (!isFinite(x) || !isFinite(y)) return null
-    if (Math.abs(x) > 100000 || Math.abs(y) > 100000) return null
-    return [Math.round(x), Math.round(y)]
-  }
-
-  function dispatch(lua) {
-    if (!root.bar) return
-    root.bar.run("hyprctl dispatch " + Util.shellQuote(lua))
-  }
-
-  // Move `toplevel` back to the focused workspace, restore floating +
-  // geometry when it was floating before minimize, then focus it.
   function restoreToplevel(toplevel) {
     if (!toplevel || !root.bar) return
-    var key = root.safeAddress(toplevel)
+    var key = root.addressOf(toplevel)
     if (!key) {
       console.warn(root.moduleName + ": refusing restore of window with invalid address")
       return
     }
-    var addr = "address:0x" + key
-    var ws = root.boundedInt(Hyprland.focusedWorkspace ? Hyprland.focusedWorkspace.id : 1, 1, 99999, 1)
-    var mem = root.floatMemory[key] || {}
     var ipc = toplevel.lastIpcObject || {}
-    var wasFloating = mem.floating === true ||
-      ipc.floating === true || ipc.floating === "true" || ipc.floating === 1
-    var at = root.boundedPoint(mem.at || ipc.at)
-    var size = root.boundedPoint(mem.size || ipc.size)
-
-    root.dispatch(
-      "hl.dsp.window.move({ window = \"" + addr + "\", workspace = " + ws + ", follow = false })")
-
-    if (wasFloating) {
-      root.dispatch(
-        "hl.dsp.window.float({ window = \"" + addr + "\", action = \"enable\" })")
-      if (size) {
-        root.dispatch(
-          "hl.dsp.window.resize({ window = \"" + addr + "\", x = " +
-          size[0] + ", y = " + size[1] + " })")
-      }
-      if (at) {
-        root.dispatch(
-          "hl.dsp.window.move({ window = \"" + addr + "\", x = " +
-          at[0] + ", y = " + at[1] + " })")
-      } else {
-        root.dispatch("hl.dsp.window.center({ window = \"" + addr + "\" })")
-      }
-    }
-
-    root.dispatch("hl.dsp.focus({ window = \"" + addr + "\" })")
-
-    // Hide special:minimized if it was left open as a visible overlay.
-    if (root.bar) {
-      root.bar.run(
-        "bash -c " + Util.shellQuote(
-          "open=$(hyprctl monitors -j | jq '[.[] | select(.specialWorkspace.name==\"special:minimized\")] | length'); " +
-          "[ \"${open:-0}\" -gt 0 ] && hyprctl dispatch 'hl.dsp.workspace.toggle_special(\"minimized\")' >/dev/null"
-        )
-      )
-    }
+    var state = Model.resolveRestoreState({
+      address: key,
+      floating: ipc.floating,
+      at: ipc.at,
+      size: ipc.size
+    }, root.floatMemory)
+    var cmd = Model.buildRestoreCommand({
+      address: key,
+      workspace: Model.restoreWorkspaceId(Hyprland.focusedWorkspace, Hyprland.focusedMonitor),
+      floating: state.floating,
+      at: state.at,
+      size: state.size
+    })
+    if (cmd) root.bar.run(cmd)
   }
 
-  // Most recently focused minimized window (lowest focusHistoryID).
-  // Single-shot — not broadcast — so multi-monitor bars do not fire N restores.
-  // Note: deliberately NOT exposed over IPC — the only programmatic way to
-  // restore is the user's own keybind running restore-last.sh (see README).
   function restoreLast() {
     if (root.count === 0) return
     root.restoreToplevel(root.minimized[0])
@@ -324,7 +313,7 @@ BarWidget {
 
         bar: root.bar
         text: root.iconFor(modelData)
-        tooltipText: root.sanitizeTitle(modelData.title) || "Minimized window"
+        tooltipText: Model.sanitizeTitle(modelData.title) || "Minimized window"
         horizontalMargin: 4
         verticalPadding: 6
         fixedWidth: root.vertical ? root.barSize : -1

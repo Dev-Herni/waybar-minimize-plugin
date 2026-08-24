@@ -1,16 +1,17 @@
 # Minimized windows — Omarchy bar widget
 
-<img width="233" height="106" alt="image" src="https://github.com/user-attachments/assets/7c78dd11-bf17-467f-9a47-afcab49ad840" />
-
+![Minimized windows in the Omarchy bar](preview.png)
 
 A Quickshell bar widget for **Omarchy** that tracks windows minimized to
 Hyprland's `special:minimized` workspace and shows one clickable Nerd Font
 icon per window in the bar. Clicking an icon restores that exact window.
 
-Replaces the original Waybar module with a native Omarchy plugin: no scripts,
-no polling, no `socat`/`jq` — the widget reads Quickshell's Hyprland models,
-so it updates instantly on `openwindow`/`closewindow`/`movewindow`/workspace
-events.
+Replaces the original Waybar module with a native Omarchy plugin: the bar
+widget itself does no polling and no `socat`. It reads Quickshell's Hyprland
+models, so icons update instantly on `openwindow`/`closewindow`/`movewindow`/
+workspace events. Restore (click or the optional keybind script) issues a
+single sequential `hyprctl` chain so float/geometry cannot race the workspace
+move.
 
 ## Features
 
@@ -71,9 +72,10 @@ Omarchy). The plugin itself exposes **no IPC**, so nothing on your system can
 trigger restores behind your back — window state only changes when you click
 an icon or run the script yourself.
 
-Note: unlike clicking a bar icon, the script variant does not re-apply
-floating state or saved geometry (that memory lives inside the widget).
-Clicking icons always restores windows exactly as they were.
+The script restores floating state and saved geometry the same way a bar
+click does: it reads the window's current Hyprland client info, then the
+widget's snapshot file (`~/.local/state/omarchy/dev-herni.minimized.json`)
+if Hyprland dropped the floating flag while the window was parked.
 
 ## How it works
 
