@@ -7,7 +7,9 @@ import qs.Commons
 import qs.Ui
 
 // Omarchy bar widget that shows windows minimized to Hyprland's
-// special:minimized workspace and restores the most recent one on click.
+// special:minimized workspace, one clickable icon per window. Clicking an
+// icon restores that exact window; the IPC restore action restores the most
+// recently focused one for keybind workflows.
 //
 // Floating state + geometry are snapshotted while a window is still on a
 // normal workspace, then re-applied on restore. Hyprland sometimes drops
@@ -196,22 +198,7 @@ BarWidget {
     return root.iconMap["default"]
   }
 
-  readonly property string iconText: root.renderIcons()
-  readonly property string tooltip: root.renderTooltip()
-
-  function renderIcons() {
-    var parts = []
-    for (var i = 0; i < root.minimized.length; i++)
-      parts.push(root.iconFor(root.minimized[i]))
-    return parts.join("  ")
-  }
-
-  function renderTooltip() {
-    var lines = ["Minimized (" + root.count + "):"]
-    for (var i = 0; i < root.minimized.length; i++)
-      lines.push("- " + root.minimized[i].title)
-    return lines.join("\n")
-  }
+  readonly property real trailingGap: root.vertical ? 0 : Style.spaceReal(1.5)
 
   // ------------------------------------------------------------------ actions
 
@@ -277,8 +264,8 @@ BarWidget {
   // ------------------------------------------------------------------ ui
 
   visible: root.count > 0
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  implicitWidth: grid.implicitWidth + root.trailingGap
+  implicitHeight: grid.implicitHeight
 
   IpcHandler {
     target: "dev-herni.minimized"
@@ -293,16 +280,29 @@ BarWidget {
     }
   }
 
-  WidgetButton {
-    id: button
+  GridLayout {
+    id: grid
     anchors.fill: parent
-    bar: root.bar
-    text: root.iconText
-    tooltipText: root.tooltip
-    fixedWidth: root.vertical ? root.barSize : -1
-    fixedHeight: root.barSize
-    horizontalMargin: 6
-    verticalPadding: 6
-    onPressed: root.restoreLast()
+    anchors.rightMargin: root.trailingGap
+    columns: root.vertical ? 1 : root.minimized.length
+    columnSpacing: root.vertical ? 0 : Style.space(0.5)
+    rowSpacing: root.vertical ? Style.space(2) : 0
+
+    Repeater {
+      model: root.minimized
+
+      WidgetButton {
+        required property var modelData
+
+        bar: root.bar
+        text: root.iconFor(modelData)
+        tooltipText: modelData.title || "Minimized window"
+        horizontalMargin: 4
+        verticalPadding: 6
+        fixedWidth: root.vertical ? root.barSize : -1
+        fixedHeight: root.barSize
+        onPressed: function() { root.restoreToplevel(modelData) }
+      }
+    }
   }
 }
