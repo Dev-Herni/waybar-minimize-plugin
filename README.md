@@ -20,7 +20,8 @@ events.
 - **Floating-state memory**: floating flag and geometry are snapshotted before
   minimize and re-applied on restore, surviving Hyprland's tendency to drop
   them across special-workspace round-trips.
-- **Keybindings**: minimize, toggle the overlay, and restore via keybinds.
+- **No IPC surface**: restoring happens via bar clicks or your own keybind
+  running the bundled `restore-last.sh` — nothing else can trigger it.
 
 ## Prerequisites
 
@@ -40,38 +41,36 @@ Bar), picking **Minimized windows** from the widget catalog.
 
 ## Keybindings
 
-Add these to `~/.config/hypr/bindings.lua`:
+The widget needs no configuration. Add whatever keybinds you like to
+`~/.config/hypr/bindings.lua` — the two basics are plain Hyprland dispatches,
+no plugin involved:
 
 ```lua
--- Minimize / restore windows
+-- Minimize the focused window into the hidden workspace
 o.bind("SUPER + M", "Minimize window", "hyprctl dispatch 'hl.dsp.window.move({ workspace = \"special:minimized\", follow = false })'")
+
+-- Show / hide the minimized-windows overlay
 o.bind("SUPER + ALT + M", "Toggle minimized overlay", "hyprctl dispatch 'hl.dsp.workspace.toggle_special(\"minimized\")'")
 ```
 
-### Restore keybind (opt-in IPC)
+### Optional: a restore-last keybind
 
-The `restore` action is also reachable programmatically over the shell's IPC
-(target `dev-herni.minimized`), which lets any local process move and focus a
-minimized window. Because that mutates window state without a click, it is
-**disabled by default**. To opt in, create:
-
-```
-~/.config/omarchy/plugins/dev-herni.minimized.conf
-```
-
-containing the line:
-
-```ini
-ipc_restore_enabled = true
-```
-
-It takes effect immediately (no restart needed), after which you can bind:
+Restoring a specific window is one click on its bar icon. If you also want a
+keyboard shortcut for "restore the most recently minimized window", bind the
+small script that ships with this plugin:
 
 ```lua
-o.bind("SUPER + SHIFT + M", "Restore last minimized window", "omarchy-shell dev-herni.minimized restore")
+o.bind("SUPER + SHIFT + M", "Restore last minimized window", "~/.config/omarchy/plugins/dev-herni.minimized/restore-last.sh")
 ```
 
-Bar clicks never require this opt-in.
+The script talks straight to Hyprland (`hyprctl` + `jq`, both ship with
+Omarchy). The plugin itself exposes **no IPC**, so nothing on your system can
+trigger restores behind your back — window state only changes when you click
+an icon or run the script yourself.
+
+Note: unlike clicking a bar icon, the script variant does not re-apply
+floating state or saved geometry (that memory lives inside the widget).
+Clicking icons always restores windows exactly as they were.
 
 ## How it works
 
