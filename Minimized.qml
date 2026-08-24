@@ -55,7 +55,8 @@ BarWidget {
     var ipc = toplevel && toplevel.lastIpcObject
     if (!ipc || ipc.focusHistoryID === undefined || ipc.focusHistoryID === null)
       return 999999
-    return Number(ipc.focusHistoryID)
+    var n = Number(ipc.focusHistoryID)
+    return isFinite(n) ? n : 999999
   }
 
   function addressOf(toplevel) {
@@ -91,9 +92,9 @@ BarWidget {
 
       var ipc = t.lastIpcObject || {}
       var floating = ipc.floating === true || ipc.floating === "true" || ipc.floating === 1
-      var at = ipc.at
-      var size = ipc.size
       var prev = next[addr]
+      var at = root.boundedPoint(ipc.at)
+      var size = root.boundedPoint(ipc.size)
       if (!prev || prev.floating !== floating ||
           JSON.stringify(prev.at) !== JSON.stringify(at) ||
           JSON.stringify(prev.size) !== JSON.stringify(size)) {
@@ -177,7 +178,10 @@ BarWidget {
 
   function iconFor(toplevel) {
     var klass = root.classOf(toplevel).toLowerCase()
-    if (root.iconMap[klass]) return root.iconMap[klass]
+    // Own-property check only: classes like "constructor"/"toString" would
+    // otherwise resolve to inherited Object.prototype members.
+    if (Object.prototype.hasOwnProperty.call(root.iconMap, klass))
+      return root.iconMap[klass]
     if (klass.indexOf("discord") !== -1 || klass.indexOf("vesktop") !== -1 ||
         klass.indexOf("webcord") !== -1) return root.iconMap["discord"]
     if (klass.indexOf("ghostty") !== -1 || klass.indexOf("terminal") !== -1 ||
