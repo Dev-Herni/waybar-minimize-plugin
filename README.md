@@ -19,13 +19,15 @@ move.
   polling, no subprocesses.
 - **Per-window icons**: one button per minimized window; clicking an icon
   restores that specific window (not just the most recent one).
-- **Smart icons**: per-class Nerd Font glyphs with fuzzy fallbacks
-  (ghostty/terminal, chrome/firefox/brave, nautilus/thunar, spotify, code, ...).
+- **Smart icons**: per-class Nerd Font glyphs with tight fallbacks
+  (ghostty/terminal, chrome/firefox/brave/zen, nautilus/thunar, spotify, vscode).
 - **Floating-state memory**: floating flag and geometry are snapshotted before
   minimize and re-applied on restore, surviving Hyprland's tendency to drop
-  them across special-workspace round-trips.
-- **No IPC surface**: restoring happens via bar clicks or your own keybind
-  running the bundled `restore-last.sh` — nothing else can trigger it.
+  them across special-workspace round-trips. Snapshots persist to
+  `~/.local/state/omarchy/dev-herni.minimized.json` so a shell restart does
+  not forget them; every bar instance (one per monitor) watches that file.
+- **No IPC surface**: restoring happens via a left-click on a bar icon or your
+  own keybind running the bundled `restore-last.sh` — nothing else can trigger it.
 
 ## Prerequisites
 
@@ -75,7 +77,9 @@ an icon or run the script yourself.
 The script restores floating state and saved geometry the same way a bar
 click does: it reads the window's current Hyprland client info, then the
 widget's snapshot file (`~/.local/state/omarchy/dev-herni.minimized.json`)
-if Hyprland dropped the floating flag while the window was parked.
+if Hyprland dropped the floating flag while the window was parked. Restore
+always targets the focused monitor's active workspace, even if the
+minimized overlay is currently open.
 
 ## How it works
 
@@ -83,10 +87,10 @@ if Hyprland dropped the floating flag while the window was parked.
   `special:minimized` (persistent overlay, visible when toggled).
 - The widget watches that workspace's toplevels and shows one icon per window,
   ordered by focus history.
-- Clicking an icon moves that window back to the active workspace, re-applies
-  its floating state/geometry if it had any, focuses it, and closes the
-  special-workspace overlay if nothing else is showing, using Hyprland's Lua
-  dispatcher syntax:
+- Left-clicking an icon moves that window back to the focused monitor's
+  active workspace, re-applies its floating state/geometry if it had any,
+  focuses it, and hides the special-workspace overlay if it is showing,
+  using Hyprland's Lua dispatcher syntax:
   `hyprctl dispatch 'hl.dsp.window.move({ window = "address:0x...", workspace = <id>, follow = false })'`.
 
 ## License
@@ -99,4 +103,6 @@ if Hyprland dropped the floating flag while the window was parked.
 omarchy plugin remove dev-herni.minimized --yes
 ```
 
-The plugin creates no files outside its own folder.
+Apart from the state file described above
+(`~/.local/state/omarchy/dev-herni.minimized.json`), the plugin creates no
+files outside its own folder.

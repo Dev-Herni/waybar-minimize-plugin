@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell
 import Quickshell.Hyprland
+import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "MinimizedModel.js" as Model
@@ -14,6 +15,8 @@ import "MinimizedModel.js" as Model
 // Floating state + geometry are snapshotted while a window is still on a
 // normal workspace, then re-applied on restore. Hyprland sometimes drops
 // floating across a special-workspace round-trip (especially cross-monitor).
+// Snapshots persist to disk so a shell restart does not forget them, and
+// FileView keeps every bar instance (one per monitor) on the same file.
 BarWidget {
   id: root
   moduleName: "dev-herni.minimized"
@@ -23,6 +26,9 @@ BarWidget {
   // address (hex, no 0x) -> { floating, at, size, pendingTiled? }
   property var floatMemory: ({})
   property bool snapshotQueued: false
+  property bool memoryHydrated: false
+  property bool applyingDisk: false
+  property string lastPersisted: ""
 
   readonly property string memoryPath: {
     var xdg = Quickshell.env("XDG_STATE_HOME")
@@ -30,27 +36,45 @@ BarWidget {
     return base + "/omarchy/dev-herni.minimized.json"
   }
 
-  readonly property var minimized: {
-    var _ws = Hyprland.workspaces.values
-    var _tops = Hyprland.toplevels ? Hyprland.toplevels.values : []
-    return root.collectMinimized()
+  readonly property string memoryDir: {
+    var slash = root.memoryPath.lastIndexOf("/")
+    return slash > 0 ? root.memoryPath.slice(0, slash) : "."
   }
+
+  // Plain property, refreshed explicitly (see refreshMinimized). It must not
+  // be a readonly binding: collectMinimized() walks Hyprland.toplevels through
+  // indexed access, which QML's binding engine does not track, so a readonly
+  // binding would freeze at its initial value and never show icons when
+  // windows move onto special:minimized after the widget loads.
+  property var minimized: []
   readonly property int count: minimized.length
 
+  function refreshMinimized() {
+    var next = root.collectMinimized()
+    if (Model.minimizedSignature(next) === Model.minimizedSignature(root.minimized))
+      return
+    root.minimized = next
+  }
+
   function collectMinimized() {
-    var result = []
-    var workspaces = Hyprland.workspaces.values
-    for (var i = 0; i < workspaces.length; i++) {
-      if (workspaces[i].name === "special:minimized") {
-        var toplevels = workspaces[i].toplevels.values
-        for (var j = 0; j < toplevels.length; j++)
-          result.push(toplevels[j])
-      }
+    var tops = Hyprland.toplevels ? Hyprland.toplevels.values : []
+    var list = []
+    for (var i = 0; i < tops.length; i++) {
+      var t = tops[i]
+      var ipc = t.lastIpcObject || {}
+      var ws = t.workspace
+      list.push({
+        address: root.addressOf(t),
+        title: t.title || ipc.title || "",
+        className: root.classOf(t),
+        workspace: { name: (ws && ws.name) || (ipc.workspace && ipc.workspace.name) || "" },
+        floating: ipc.floating,
+        at: ipc.at,
+        size: ipc.size,
+        focusHistoryID: root.focusId(t)
+      })
     }
-    result.sort(function(a, b) {
-      return root.focusId(a) - root.focusId(b)
-    })
-    return result
+    return Model.collectMinimizedEntries(list)
   }
 
   function focusId(toplevel) {
@@ -68,10 +92,10 @@ BarWidget {
 
   function isSpecialMinimized(toplevel) {
     var ws = toplevel && toplevel.workspace
-    if (ws && ws.name) return String(ws.name) === "special:minimized"
+    if (ws && ws.name) return Model.isMinimizedWorkspaceName(ws.name)
     var ipc = toplevel && toplevel.lastIpcObject
     if (ipc && ipc.workspace && ipc.workspace.name)
-      return String(ipc.workspace.name) === "special:minimized"
+      return Model.isMinimizedWorkspaceName(ipc.workspace.name)
     return false
   }
 
@@ -101,9 +125,10 @@ BarWidget {
   function snapshotFloatState() {
     try {
       var next = Model.nextFloatMemory(root.floatMemory, root.snapshotWindows())
-      if (JSON.stringify(next) !== JSON.stringify(root.floatMemory))
+      if (JSON.stringify(next) !== JSON.stringify(root.floatMemory)) {
         root.floatMemory = next
-      persistTimer.restart()
+        if (root.memoryHydrated && !root.applyingDisk) persistTimer.restart()
+      }
       if (Model.hasPendingTiled(next)) confirmTiledTimer.restart()
     } catch (e) {
       console.warn(root.moduleName + " snapshot failed: " + e)
@@ -111,27 +136,32 @@ BarWidget {
   }
 
   function persistFloatMemory() {
+    if (!root.memoryHydrated || root.applyingDisk) return
     try {
-      var persistable = {}
-      var mem = root.floatMemory || {}
-      for (var key in mem) {
-        if (!Object.prototype.hasOwnProperty.call(mem, key) || !mem[key]) continue
-        persistable[key] = {
-          floating: mem[key].floating === true,
-          at: mem[key].at || null,
-          size: mem[key].size || null
-        }
-      }
-      var slash = root.memoryPath.lastIndexOf("/")
-      var dir = slash > 0 ? root.memoryPath.slice(0, slash) : "."
-      Quickshell.execDetached(["bash", "-lc",
-        "mkdir -p " + Model.shellQuote(dir) +
-        " && printf '%s\\n' " + Model.shellQuote(JSON.stringify(persistable)) +
-        " > " + Model.shellQuote(root.memoryPath)
-      ])
+      var persistable = Model.persistableMemory(root.floatMemory)
+      var encoded = JSON.stringify(persistable)
+      if (encoded === root.lastPersisted) return
+      root.lastPersisted = encoded
+      memoryFile.setText(encoded + "\n")
     } catch (e) {
       console.warn(root.moduleName + " persist failed: " + e)
     }
+  }
+
+  function ingestMemoryText(text) {
+    var parsed = Model.parseFloatMemory(text)
+    var encoded = JSON.stringify(Model.persistableMemory(parsed))
+    var first = !root.memoryHydrated
+    root.memoryHydrated = true
+    if (encoded === root.lastPersisted) {
+      if (first) root.queueSnapshot()
+      return
+    }
+    root.applyingDisk = true
+    root.floatMemory = parsed
+    root.lastPersisted = encoded
+    root.applyingDisk = false
+    root.queueSnapshot()
   }
 
   function queueSnapshot() {
@@ -143,30 +173,75 @@ BarWidget {
     })
   }
 
+  function monitorList() {
+    var mons = Hyprland.monitors ? Hyprland.monitors.values : []
+    var list = []
+    for (var i = 0; i < mons.length; i++) {
+      var m = mons[i]
+      var ipc = (m && m.lastIpcObject) || {}
+      list.push({
+        x: m.x !== undefined ? m.x : ipc.x,
+        y: m.y !== undefined ? m.y : ipc.y,
+        width: m.width || ipc.width,
+        height: m.height || ipc.height
+      })
+    }
+    return list
+  }
+
+  FileView {
+    id: memoryFile
+    path: root.memoryPath
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.ingestMemoryText(text())
+    onLoadFailed: {
+      root.memoryHydrated = true
+      root.queueSnapshot()
+    }
+    onFileChanged: reload()
+  }
+
+  Process {
+    id: ensureMemoryDir
+    command: ["mkdir", "-p", root.memoryDir]
+    running: true
+    onExited: memoryFile.reload()
+  }
+
   Connections {
     target: Hyprland
     function onRawEvent(event) {
       var name = event && event.name ? String(event.name) : ""
-      if (name === "openwindow" || name === "closewindow" ||
-          name === "movewindow" || name === "movewindowv2" ||
-          name === "changefloatingmode" || name === "fullscreen" ||
-          name === "workspace" || name === "workspacev2" ||
-          name === "activewindow" || name === "activewindowv2") {
+      if (Model.eventSnapshotsFloat(name)) {
         Hyprland.refreshToplevels()
         root.queueSnapshot()
-        confirmTiledTimer.restart()
       }
+      if (Model.eventRefreshesIcons(name))
+        root.refreshMinimized()
     }
   }
 
   Connections {
     target: Hyprland.toplevels
-    function onValuesChanged() { root.queueSnapshot() }
+    function onValuesChanged() {
+      root.queueSnapshot()
+      root.refreshMinimized()
+    }
+  }
+
+  Connections {
+    target: Hyprland.workspaces
+    function onValuesChanged() {
+      root.queueSnapshot()
+      root.refreshMinimized()
+    }
   }
 
   Timer {
     id: confirmTiledTimer
-    interval: 150
+    interval: 400
     repeat: false
     onTriggered: root.snapshotFloatState()
   }
@@ -186,6 +261,7 @@ BarWidget {
     onTriggered: {
       Hyprland.refreshToplevels()
       root.snapshotFloatState()
+      root.refreshMinimized()
       warmupTimer.ticks += 1
       if (warmupTimer.ticks >= 12) warmupTimer.stop()
     }
@@ -194,7 +270,7 @@ BarWidget {
   Component.onCompleted: {
     Hyprland.refreshToplevels()
     root.queueSnapshot()
-    persistTimer.restart()
+    root.refreshMinimized()
     warmupTimer.start()
   }
 
@@ -210,13 +286,19 @@ BarWidget {
     "google-chrome-stable": "\uf268",
     "chrome": "\uf268",
     "firefox": "\uf269",
-    "brave-browser": "\uf13b",
-    "brave": "\uf13b",
+    "zen": "\uf269",
+    "zen-browser": "\uf269",
+    "brave-browser": "\uDB82\uDCE5",
+    "brave": "\uDB82\uDCE5",
     "org.gnome.nautilus": "\uDB80\uDE2E",
     "nautilus": "\uDB80\uDE2E",
+    "nemo": "\uDB80\uDE2E",
     "spotify": "\uDB81\uDCC7",
     "code": "\uDB82\uDE1E",
+    "code-oss": "\uDB82\uDE1E",
     "code-url-handler": "\uDB82\uDE1E",
+    "codium": "\uDB82\uDE1E",
+    "vscodium": "\uDB82\uDE1E",
     "discord": "\uDB81\uDE6F",
     "vesktop": "\uDB81\uDE6F",
     "webcord": "\uDB81\uDE6F",
@@ -228,54 +310,37 @@ BarWidget {
   })
 
   function classOf(toplevel) {
-    var ipc = toplevel.lastIpcObject
-    if (ipc && ipc.class) return String(ipc.class)
-    if (ipc && ipc.initialClass) return String(ipc.initialClass)
+    if (!toplevel) return ""
+    var ipc = toplevel.lastIpcObject || {}
+    if (ipc.class) return String(ipc.class)
+    if (ipc.initialClass) return String(ipc.initialClass)
     if (toplevel.wayland && toplevel.wayland.appId) return String(toplevel.wayland.appId)
     return ""
   }
 
-  function iconFor(toplevel) {
-    var klass = root.classOf(toplevel).toLowerCase()
-    if (Object.prototype.hasOwnProperty.call(root.iconMap, klass))
-      return root.iconMap[klass]
-    if (klass.indexOf("discord") !== -1 || klass.indexOf("vesktop") !== -1 ||
-        klass.indexOf("webcord") !== -1) return root.iconMap["discord"]
-    if (klass.indexOf("ghostty") !== -1 || klass.indexOf("terminal") !== -1 ||
-        klass.indexOf("alacritty") !== -1 || klass.indexOf("kitty") !== -1 ||
-        klass.indexOf("foot") !== -1) return root.iconMap["foot"]
-    if (klass.indexOf("chrom") !== -1) return root.iconMap["chromium"]
-    if (klass.indexOf("brave") !== -1) return root.iconMap["brave"]
-    if (klass.indexOf("firefox") !== -1 || klass.indexOf("browser") !== -1)
-      return root.iconMap["firefox"]
-    if (klass.indexOf("nautilus") !== -1 || klass.indexOf("thunar") !== -1 ||
-        klass.indexOf("dolphin") !== -1 || klass.indexOf("files") !== -1)
-      return root.iconMap["nautilus"]
-    if (klass.indexOf("spotify") !== -1 || klass.indexOf("music") !== -1)
-      return root.iconMap["spotify"]
-    if (klass.indexOf("code") !== -1 || klass.indexOf("vsc") !== -1 ||
-        klass.indexOf("editor") !== -1) return root.iconMap["code"]
-    return root.iconMap["default"]
+  function iconFor(entry) {
+    var klass = String((entry && (entry.className || entry.class)) || "").toLowerCase()
+    if (!klass) klass = root.classOf(entry).toLowerCase()
+    return Model.iconForClass(klass, root.iconMap)
   }
 
   readonly property real trailingGap: root.vertical ? 0 : Style.spaceReal(1.5)
 
   // ------------------------------------------------------------------ actions
 
-  function restoreToplevel(toplevel) {
-    if (!toplevel || !root.bar) return
-    var key = root.addressOf(toplevel)
+  function restoreToplevel(entry) {
+    if (!entry || !root.bar) return
+    var key = Model.normalizeAddress(entry.address || root.addressOf(entry))
     if (!key) {
       console.warn(root.moduleName + ": refusing restore of window with invalid address")
       return
     }
-    var ipc = toplevel.lastIpcObject || {}
     var state = Model.resolveRestoreState({
       address: key,
-      floating: ipc.floating,
-      at: ipc.at,
-      size: ipc.size
-    }, root.floatMemory)
+      floating: entry.floating,
+      at: entry.at,
+      size: entry.size
+    }, root.floatMemory, root.monitorList())
     var cmd = Model.buildRestoreCommand({
       address: key,
       workspace: Model.restoreWorkspaceId(Hyprland.focusedWorkspace, Hyprland.focusedMonitor),
@@ -283,7 +348,10 @@ BarWidget {
       at: state.at,
       size: state.size
     })
-    if (cmd) root.bar.run(cmd)
+    if (cmd) {
+      root.persistFloatMemory()
+      root.bar.run(cmd)
+    }
   }
 
   function restoreLast() {
@@ -301,7 +369,7 @@ BarWidget {
     id: grid
     anchors.fill: parent
     anchors.rightMargin: root.trailingGap
-    columns: root.vertical ? 1 : root.minimized.length
+    columns: root.vertical ? 1 : Math.max(1, root.minimized.length)
     columnSpacing: root.vertical ? 0 : Style.space(0.5)
     rowSpacing: root.vertical ? Style.space(2) : 0
 
@@ -314,11 +382,13 @@ BarWidget {
         bar: root.bar
         text: root.iconFor(modelData)
         tooltipText: Model.sanitizeTitle(modelData.title) || "Minimized window"
-        horizontalMargin: 4
+        horizontalMargin: 6
         verticalPadding: 6
         fixedWidth: root.vertical ? root.barSize : -1
         fixedHeight: root.barSize
-        onPressed: function() { root.restoreToplevel(modelData) }
+        onPressed: function(button) {
+          if (button === Qt.LeftButton) root.restoreToplevel(modelData)
+        }
       }
     }
   }

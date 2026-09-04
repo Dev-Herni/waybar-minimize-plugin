@@ -56,7 +56,7 @@ exit 1
     PATH: dir + ":" + process.env.PATH,
     MINIMIZED_FLOAT_MEMORY: memoryFile
   });
-  const result = spawnSync("bash", [SCRIPT], { env, encoding: "utf8" });
+  const result = spawnSync("bash", [SCRIPT].concat(extra.args || []), { env, encoding: "utf8" });
   const dispatches = fs.existsSync(log)
     ? fs.readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
     : [];
@@ -110,4 +110,88 @@ test("restore-last.sh is a no-op when nothing is minimized", () => {
   ]);
   assert.equal(status, 0);
   assert.deepEqual(dispatches, []);
+});
+
+test("restore-last.sh restores to the focused monitor's active workspace while the overlay is open", () => {
+  const { status, stderr, dispatches } = runRestore([
+    {
+      address: "0xabc",
+      workspace: { name: "special:minimized" },
+      focusHistoryID: 0,
+      floating: false
+    }
+  ], {
+    activeWorkspace: { id: -98 },
+    monitors: [
+      { focused: true, activeWorkspace: { id: 3 }, specialWorkspace: { name: "special:minimized" } }
+    ]
+  });
+  assert.equal(status, 0, stderr);
+  assert.match(dispatches[0], /workspace = 3/, JSON.stringify(dispatches));
+});
+
+test("restore-last.sh keeps live geometry when widget memory has null at/size", () => {
+  const { status, stderr, dispatches } = runRestore([
+    {
+      address: "0xabc",
+      workspace: { name: "special:minimized" },
+      focusHistoryID: 0,
+      floating: true,
+      at: [120, 80],
+      size: [800, 600]
+    }
+  ], {
+    memory: { abc: { floating: true, at: null, size: null } }
+  });
+  assert.equal(status, 0, stderr);
+  const joined = dispatches.join("\n");
+  assert.match(joined, /window\.resize[\s\S]*x = 800\b/);
+  assert.match(joined, /y = 600\b/);
+  assert.match(joined, /window\.move[\s\S]*x = 120\b/);
+  assert.match(joined, /y = 80\b/);
+});
+
+test("restore-last.sh sorts windows with missing focusHistoryID last", () => {
+  const { dispatches } = runRestore([
+    { address: "0xbbb", workspace: { name: "special:minimized" }, focusHistoryID: 7, floating: false },
+    { address: "0xaaa", workspace: { name: "special:minimized" }, floating: false }
+  ]);
+  assert.match(dispatches[0], /0xbbb/, JSON.stringify(dispatches));
+});
+
+test("restore-last.sh skips malformed geometry and still restores", () => {
+  const { status, stderr, dispatches } = runRestore([
+    {
+      address: "0xabc",
+      workspace: { name: "special:minimized" },
+      focusHistoryID: 0,
+      floating: true,
+      at: ["evil", {}],
+      size: [1000000000, 5]
+    }
+  ]);
+  assert.equal(status, 0, stderr);
+  const joined = dispatches.join("\n");
+  assert.match(joined, /window\.float/);
+  assert.doesNotMatch(joined, /window\.resize/);
+  assert.match(joined, /window\.center/);
+});
+
+test("restore-last.sh restores a specific address when given as an argument", () => {
+  const { status, stderr, dispatches } = runRestore([
+    {
+      address: "0xaaa",
+      workspace: { name: "special:minimized" },
+      focusHistoryID: 0,
+      floating: false
+    },
+    {
+      address: "0xbbb",
+      workspace: { name: "special:minimized" },
+      focusHistoryID: 1,
+      floating: false
+    }
+  ], { args: ["bbb"] });
+  assert.equal(status, 0, stderr);
+  assert.match(dispatches[0], /window = "address:0xbbb"/);
 });

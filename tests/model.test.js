@@ -116,3 +116,146 @@ test("buildRestoreCommand skips float/geometry for tiled windows", () => {
   assert.match(cmd, /workspace = 2/);
   assert.match(cmd, /hl\.dsp\.focus/);
 });
+
+test("sanitizeTitle does not HTML-escape (bar tooltips are plain text)", () => {
+  assert.equal(Model.sanitizeTitle("Foo & Bar <baz>"), "Foo & Bar <baz>");
+  assert.equal(Model.sanitizeTitle("  lots   of\tspace  "), "lots of space");
+});
+
+test("parseFloatMemory keeps valid snapshots and drops bad keys", () => {
+  const mem = Model.parseFloatMemory(JSON.stringify({
+    abc: { floating: true, at: [10, 20], size: [300, 200], pendingTiled: true },
+    "not hex": { floating: true, at: [1, 2], size: [3, 4] },
+    "": { floating: false }
+  }));
+  assert.equal(mem.abc.floating, true);
+  assert.deepEqual(mem.abc.at, [10, 20]);
+  assert.equal(mem.abc.pendingTiled, undefined);
+  assert.equal(mem["not hex"], undefined);
+});
+
+test("parseFloatMemory returns empty object for junk", () => {
+  assert.deepEqual(Model.parseFloatMemory("not-json"), {});
+  assert.deepEqual(Model.parseFloatMemory(""), {});
+  assert.deepEqual(Model.parseFloatMemory("[]"), {});
+});
+
+test("persistableMemory strips pendingTiled", () => {
+  const out = Model.persistableMemory({
+    abc: { floating: true, at: [1, 2], size: [3, 4], pendingTiled: true }
+  });
+  assert.deepEqual(out.abc, { floating: true, at: [1, 2], size: [3, 4] });
+});
+
+test("nextFloatMemory keeps a disk snapshot for windows already on special:minimized", () => {
+  const loaded = Model.parseFloatMemory(JSON.stringify({
+    abc: { floating: true, at: [40, 50], size: [640, 480] }
+  }));
+  const next = Model.nextFloatMemory(loaded, [
+    { address: "abc", special: true, floating: false, at: [0, 0], size: [1920, 1080] }
+  ]);
+  assert.equal(next.abc.floating, true);
+  assert.deepEqual(next.abc.at, [40, 50]);
+});
+
+test("iconForClass does not use generic browser/music/editor fallbacks", () => {
+  const map = {
+    firefox: "F",
+    spotify: "S",
+    code: "C",
+    brave: "B",
+    chromium: "G",
+    default: "D"
+  };
+  assert.equal(Model.iconForClass("some-random-browser", map), "D");
+  assert.equal(Model.iconForClass("gnome-music", map), "D");
+  assert.equal(Model.iconForClass("gnome-text-editor", map), "D");
+  assert.equal(Model.iconForClass("brave-browser", map), "B");
+  assert.equal(Model.iconForClass("zen-browser", map), "F");
+  assert.equal(Model.iconForClass("code-oss", map), "C");
+});
+
+test("minimizedSignature ignores object identity so Repeaters can stay put", () => {
+  const a = [{ address: "abc", title: "x", className: "foot", focusHistoryID: 1 }];
+  const b = [{ address: "abc", title: "x", className: "foot", focusHistoryID: 1 }];
+  assert.equal(Model.minimizedSignature(a), Model.minimizedSignature(b));
+  assert.notEqual(
+    Model.minimizedSignature(a),
+    Model.minimizedSignature([{ address: "abc", title: "y", className: "foot", focusHistoryID: 1 }])
+  );
+});
+
+test("resolveRestoreState keeps live geometry when memory at/size are null", () => {
+  const state = Model.resolveRestoreState(
+    { address: "abc", floating: false, at: [120, 80], size: [800, 600] },
+    { abc: { floating: true, at: null, size: null } }
+  );
+  assert.equal(state.floating, true);
+  assert.deepEqual(state.at, [120, 80]);
+  assert.deepEqual(state.size, [800, 600]);
+});
+
+test("event classification does not rebuild icons on every focus change", () => {
+  assert.equal(Model.eventRefreshesIcons("activewindow"), false);
+  assert.equal(Model.eventRefreshesIcons("activewindowv2"), false);
+  assert.equal(Model.eventRefreshesIcons("changefloatingmode"), false);
+  assert.equal(Model.eventRefreshesIcons("movewindowv2"), true);
+  assert.equal(Model.eventRefreshesIcons("closewindow"), true);
+  assert.equal(Model.eventSnapshotsFloat("activewindow"), true);
+  assert.equal(Model.eventSnapshotsFloat("changefloatingmode"), true);
+  assert.equal(Model.eventSnapshotsFloat("configreloaded"), false);
+});
+
+test("collectMinimizedEntries snapshots address/title from toplevels, not live objects", () => {
+  const entries = Model.collectMinimizedEntries([
+    {
+      address: "0xABC",
+      title: "Discord",
+      className: "discord",
+      workspace: { name: "1" },
+      focusHistoryID: 0
+    },
+    {
+      address: "0x55896300dc70",
+      title: "foot",
+      className: "foot",
+      workspace: { name: "special:minimized" },
+      floating: true,
+      at: [40, 50],
+      size: [640, 480],
+      focusHistoryID: 2
+    },
+    {
+      address: "0xdead",
+      title: "older",
+      class: "Alacritty",
+      workspaceName: "minimized",
+      focusHistoryID: 1
+    }
+  ]);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].address, "dead");
+  assert.equal(entries[0].className, "Alacritty");
+  assert.equal(entries[1].address, "55896300dc70");
+  assert.equal(entries[1].title, "foot");
+  assert.equal(entries[1].floating, true);
+  assert.deepEqual(entries[1].at, [40, 50]);
+});
+
+test("collectMinimizedEntries drops windows with invalid addresses", () => {
+  const entries = Model.collectMinimizedEntries([
+    { address: "not-hex", workspace: { name: "special:minimized" } },
+    { address: "", workspace: { name: "special:minimized" } }
+  ]);
+  assert.deepEqual(entries, []);
+});
+
+test("clampPointToMonitors recenters when the saved position is off every screen", () => {
+  const monitors = [
+    { x: 0, y: 0, width: 2560, height: 1440 },
+    { x: 2560, y: 0, width: 1920, height: 1080 }
+  ];
+  assert.deepEqual(Model.clampPointToMonitors([994, 392], [984, 617], monitors), [994, 392]);
+  assert.deepEqual(Model.clampPointToMonitors([-1474, 240], [1028, 600], monitors), [766, 420]);
+  assert.deepEqual(Model.clampPointToMonitors([9000, 10], [400, 300], monitors), [3320, 390]);
+});
